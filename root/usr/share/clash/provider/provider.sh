@@ -1,15 +1,29 @@
 #!/bin/bash /etc/rc.common
 . /lib/functions.sh
 
-REAL_LOG="/usr/share/clash/clash_real.txt"
+
+RULE_PROVIDER="/tmp/rule_provider.yaml"
+GROUP_FILE="/tmp/groups.yaml"
+CLASH_CONFIG="/etc/clash/config.yaml"
+CONFIG_YAML_PATH=$(uci get clash.config.use_config 2>/dev/null)
+if [  -f $CONFIG_YAML_PATH ] && [ "$(ls -l $CONFIG_YAML_PATH|awk '{print int($5)}')" -ne 0 ];then
+	cp $CONFIG_YAML_PATH $CLASH_CONFIG 2>/dev/null		
+fi
+SCRIPT="/usr/share/clash/provider/script.yaml"
+rule_providers=$(uci get clash.config.rule_providers 2>/dev/null)
+CFG_FILE="/etc/config/clash"
+config_name=$(uci get clash.config.name_tag 2>/dev/null)
 lang=$(uci get luci.main.lang 2>/dev/null)
-config_type=$(uci get clash.config.config_type 2>/dev/null)
-create=$(uci get clash.config.create 2>/dev/null)
-load_from=$(uci get clash.config.loadfrom 2>/dev/null)
-config_name=$(uci get clash.config.create_tag 2>/dev/null)
-CONFIG_YAML="/usr/share/clash/config/custom/${config_name}.yaml" 
-check_name=$(grep -F "${config_name}.yaml" "/usr/share/clashbackup/create_list.conf") 
+CONFIG_YAML="/usr/share/clash/config/custom/${config_name}.yaml"  
+check_name=$(grep -F "${config_name}.yaml" "/usr/share/clashbackup/create_list.conf")
+REAL_LOG="/usr/share/clash/clash_real.txt"
 same_tag=$(uci get clash.config.same_tag 2>/dev/null)
+rcount=$( grep -c "config ruleprovider" $CFG_FILE 2>/dev/null)
+create=$(uci get clash.config.provider_config 2>/dev/null)
+SERVER_FILE="/tmp/servers.yaml"
+Proxy_Group="/tmp/Proxy_Group"
+
+if [ "${create}" -eq 1 ];then
 
 if  [ $config_name == "" ] || [ -z $config_name ];then
 
@@ -24,6 +38,7 @@ if  [ $config_name == "" ] || [ -z $config_name ];then
 	
 fi
 
+
 if [ ! -z $check_name ] && [ "${same_tag}" -eq 0 ];then
 
 	if [ $lang == "en" ] || [ $lang == "auto" ];then
@@ -34,62 +49,68 @@ if [ ! -z $check_name ] && [ "${same_tag}" -eq 0 ];then
 	sleep 5
 	echo "Clash for OpenWRT" >$REAL_LOG
 	exit 0	
-
-   
-else
-
-
-if [ "$load_from" == "sub" ];then 
-        load=$(uci get clash.config.config_path_sub 2>/dev/null)	
-elif [ "$load_from" == "upl" ];then
-	load=$(uci get clash.config.config_path_up 2>/dev/null)
 fi
 
-if [ "${create}" -eq 1 ];then
-
- 	if [ $lang == "en" ] || [ $lang == "auto" ];then
-		echo "Starting to Create Custom Config.. " >$REAL_LOG 
-	elif [ $lang == "zh_cn" ];then
-    	 echo "开始创建自定义配置..." >$REAL_LOG
-	fi
 	
-CONFIG_YAML_RULE="/usr/share/clash/custom_rule.yaml"
-SERVER_FILE="/tmp/servers.yaml"
-TEMP_FILE="/tmp/dns_temp.yaml"
-Proxy_Group="/tmp/Proxy_Group"
-GROUP_FILE="/tmp/groups.yaml"
-CONFIG_FILE="/tmp/y_groups"
-CFG_FILE="/etc/config/clash"
-DNS_FILE="/usr/share/clash/dns.yaml" 
-PROVIDER_FILE="/tmp/yaml_provider.yaml"
 
-   gcount=$( grep -c "config groups" $CFG_FILE 2>/dev/null)
-   scount=$( grep -c "config servers" $CFG_FILE 2>/dev/null)
-   pcount=$( grep -c "config provider" $CFG_FILE 2>/dev/null)
-   if [ $gcount -eq 0 ];then
- 	if [ $lang == "en" ] || [ $lang == "auto" ];then
-		echo "No policy group found. Aborting Operation .." >$REAL_LOG 
-		sleep 2
-		echo "Clash for OpenWRT" >$REAL_LOG
-	elif [ $lang == "zh_cn" ];then
-    	 echo "找不到策略组。中止操作..." >$REAL_LOG
-		 sleep 2
-		echo "Clash for OpenWRT" >$REAL_LOG
-	fi
-	exit 0	
-   fi
-
-
-set_http_path()
+if [ -f $RULE_PROVIDER ];then
+	rm -rf $RULE_PROVIDER 2>/dev/null
+fi
+	   
+	   
+rule_set()
 {
-   if [ -z "$1" ]; then
+
+   local section="$1"
+   config_get "name" "$section" "name" ""
+   config_get "type" "$section" "type" ""
+   config_get "behavior" "$section" "behavior" ""
+   config_get "path" "$section" "path" ""
+   config_get "url" "$section" "url" ""
+   config_get "interval" "$section" "interval" ""
+
+   if [ "$path" != "./ruleprovider/$name.yaml" ] && [ "$type" = "http" ]; then
+      path="./ruleprovider/$name.yaml"
+   elif [ -z "$path" ]; then
       return
    fi
-cat >> "$SERVER_FILE" <<-EOF
-      - '$1'
+   
+cat >> "$RULE_PROVIDER" <<-EOF
+  $name:
+    type: $type
+    behavior: $behavior
+    path: $path	
 EOF
+
+	
+
+	
+
+	if [ "$type" == "http" ]; then
+cat >> "$RULE_PROVIDER" <<-EOF
+    url: $url
+    interval: $interval
+EOF
+	fi
 }
 
+if [ $rcount -gt 0 ];then	
+	 config_load clash
+	 config_foreach rule_set "ruleprovider"
+fi
+
+if [ -f $RULE_PROVIDER ];then 
+	sed -i "1i\   " $RULE_PROVIDER 2>/dev/null 
+	sed -i "2i\rule-providers:" $RULE_PROVIDER 2>/dev/null
+fi
+
+
+PROVIDER_FILE="/tmp/yaml_provider.yaml"
+pcount=$( grep -c "config proxyprovider" $CFG_FILE 2>/dev/null)
+
+if [ -f $PROVIDER_FILE ];then
+	rm -rf $PROVIDER_FILE 2>/dev/null
+fi
 
 yml_proxy_provider_set()
 {
@@ -98,18 +119,17 @@ yml_proxy_provider_set()
    config_get "type" "$section" "type" ""
    config_get "name" "$section" "name" ""
    config_get "path" "$section" "path" ""
-   config_get "pathh" "$section" "pathh" ""
    config_get "provider_url" "$section" "provider_url" ""
    config_get "provider_interval" "$section" "provider_interval" ""
    config_get "health_check" "$section" "health_check" ""
    config_get "health_check_url" "$section" "health_check_url" ""
    config_get "health_check_interval" "$section" "health_check_interval" ""
    
-	if [ "$type" == "http" ];then
-		ppath="path: $path"
-	elif [ "$type" == "file" ];then
-	    ppath="path: $pathh"
-	fi
+   if [ "$path" != "./proxyprovider/$name.yaml" ] && [ "$type" = "http" ]; then
+      path="./proxyprovider/$name.yaml"
+   elif [ -z "$path" ]; then
+      return
+   fi
 	  
 
    if [ -z "$type" ]; then
@@ -131,7 +151,7 @@ yml_proxy_provider_set()
 cat >> "$PROVIDER_FILE" <<-EOF
   $name:
     type: $type
-    $ppath
+    path: $path
 EOF
    if [ ! -z "$provider_url" ]; then
 cat >> "$PROVIDER_FILE" <<-EOF
@@ -148,31 +168,22 @@ EOF
 
 }
 
+
 if [ $pcount -gt 0 ];then
-config_load "clash"
-config_foreach yml_proxy_provider_set "provider"
+	config_load "clash"
+	config_foreach yml_proxy_provider_set "proxyprovider"
 fi
 
 if [ -f $PROVIDER_FILE ];then 
-sed -i "1i\   " $PROVIDER_FILE 2>/dev/null 
-
-sed -i "2i\proxy-provider:" $PROVIDER_FILE 2>/dev/null
-
-#echo "proxy-provider:" >$PROVIDER_FILE
-rm -rf /tmp/Proxy_Provider
-
+	sed -i "1i\   " $PROVIDER_FILE 2>/dev/null 
+	sed -i "2i\proxy-providers:" $PROVIDER_FILE 2>/dev/null
+	rm -rf /tmp/Proxy_Provider
 fi
 
-set_alpn()
-{
-   if [ -z "$1" ]; then
-      return
-   fi
-cat >> "$SERVER_FILE" <<-EOF
-    - $1
-EOF
-}
 
+if [ -f $GROUP_FILE ];then
+	rm -rf $GROUP_FILE 2>/dev/null
+fi
 
 set_groups()
 {
@@ -188,6 +199,51 @@ set_groups()
 }
 
 
+set_other_groups()
+{
+   set_group=1
+   if [ "${1}" = "DIRECT" ]||[ "${1}" = "REJECT" ];then
+   echo "    - ${1}" >>$GROUP_FILE 2>/dev/null 
+   elif [ "${1}" = "ALL" ];then
+   cat $Proxy_Group >> $GROUP_FILE 2>/dev/null
+   else
+   echo "    - \"${1}\"" >>$GROUP_FILE 2>/dev/null 
+   fi
+
+}
+
+set_proxy_provider()
+{
+	local section="$1"
+	config_get "name" "$section" "name" ""
+	config_list_foreach "$section" "pgroups" set_provider_groups "$name" "$2"
+
+}
+
+set_provider_groups()
+{
+	if [ -z "$1" ]; then
+		return
+	fi
+
+	if [ "$1" = "$3" ]; then
+	   set_proxy_provider=1
+	   echo "    - ${2}" >>$GROUP_FILE
+	fi
+
+}
+
+set_alpn()
+{
+   if [ -z "$1" ]; then
+      return
+   fi
+cat >> "$SERVER_FILE" <<-EOF
+    - $1
+EOF
+}
+
+scount=$( grep -c "config servers" $CFG_FILE 2>/dev/null)
 
 servers_set()
 {
@@ -559,7 +615,7 @@ if [ ! -z "${scount}" ] || [ "${scount}" -ne 0 ];then
 
 sed -i "1i\   " $SERVER_FILE 2>/dev/null 
 
-sed -i "2i\Proxy:" $SERVER_FILE 2>/dev/null 
+sed -i "2i\proxies:" $SERVER_FILE 2>/dev/null 
 
 egrep '^ {0,}-' $SERVER_FILE |grep name: |awk -F 'name: ' '{print $2}' |sed 's/,.*//' >$Proxy_Group 2>&1
 
@@ -572,46 +628,9 @@ yml_servers_add()
 	
 	local section="$1"
 	config_get "name" "$section" "name" ""
-	config_list_foreach "$section" "groups" set_groups "$name" "$2"
+	config_list_foreach "$section" "pgroups" set_groups "$name" "$2"
 	config_get "relay_groups" "$section" "relay_groups" ""
 }
-
-
-
-set_other_groups()
-{
-set_group=1
-   if [ "${1}" = "DIRECT" ]||[ "${1}" = "REJECT" ];then
-   echo "    - ${1}" >>$GROUP_FILE 2>/dev/null 
-   elif [ "${1}" = "ALL" ];then
-   cat $Proxy_Group >> $GROUP_FILE 2>/dev/null
-   else
-   echo "    - \"${1}\"" >>$GROUP_FILE 2>/dev/null 
-   fi
-
-}
-
-set_proxy_provider()
-{
-	local section="$1"
-	config_get "name" "$section" "name" ""
-	config_list_foreach "$section" "groups" set_provider_groups "$name" "$2"
-
-}
-
-set_provider_groups()
-{
-	if [ -z "$1" ]; then
-		return
-	fi
-
-	if [ "$1" = "$3" ]; then
-	   set_proxy_provider=1
-	   echo "    - ${2}" >>$GROUP_FILE
-	fi
-
-}
-
 
 yml_groups_set()
 {
@@ -622,6 +641,7 @@ yml_groups_set()
    config_get "old_name" "$section" "old_name" ""
    config_get "test_url" "$section" "test_url" ""
    config_get "test_interval" "$section" "test_interval" ""
+   config_get "other_group" "$section" "other_group" ""
 
    if [ -z "$type" ]; then
       return
@@ -635,78 +655,101 @@ yml_groups_set()
    echo "  type: $type" >>$GROUP_FILE 2>/dev/null 
    group_name="$name"
    echo "  proxies: " >>$GROUP_FILE
-
-   #if [ "$type" == "url-test" ] || [ "$type" == "load-balance" ] || [ "$type" == "fallback" ] ; then
-   #  echo "  proxies:" >>$GROUP_FILE 2>/dev/null 
-   #   cat $Proxy_Group >> $GROUP_FILE 2>/dev/null
-   #else
-   #  echo "  proxies:" >>$GROUP_FILE 2>/dev/null 
-   #fi       
- 
-   if [ "$name" != "$old_name" ]; then
-      sed -i "s/,${old_name}$/,${name}#d/g" $load 2>/dev/null
-      sed -i "s/:${old_name}$/:${name}#d/g" $load 2>/dev/null
-      sed -i "s/\'${old_name}\'/\'${name}\'/g" $CFG_FILE 2>/dev/null
-      config_load "clash"
-   fi
    
    set_group=0
-   set_proxy_provider=0   
+   set_proxy_provider=0 
    
+   
+  	
+   config_list_foreach "$section" "other_group" set_other_groups
 
-    config_list_foreach "$section" "other_group" set_other_groups #加入其他策略组
-   
+   if [ "$( grep -c "config proxyprovider" $CFG_FILE )" -gt 0 ];then  
 
-   config_foreach yml_servers_add "servers" "$name" "$type" #加入服务器节点
+		    echo "  use: $group_name" >>$GROUP_FILE	   
+		    if [ "$type" != "relay" ]; then
+				 config_foreach set_proxy_provider "proxyprovider" "$group_name" 
+		    fi
 
-   
-   if [ "$( grep -c "config provider" $CFG_FILE )" -ne 0 ];then
-   
-		echo "  use: $group_name" >>$GROUP_FILE
-	   
-	   
-	   
-	    if [ "$type" != "relay" ]; then
-			 config_foreach set_proxy_provider "provider" "$group_name" #加入代理集
-	    fi
+		    if [ "$set_proxy_provider" -eq 1 ]; then
+			  sed -i "/^ \{0,\}use: ${group_name}/c\  use:" $GROUP_FILE
+		    else
+			  sed -i "/use: ${group_name}/d" $GROUP_FILE 
+		    fi
+			
 
-	   if [ "$set_group" -eq 1 ]; then
-		  sed -i "/^ \{0,\}proxies: ${group_name}/c\  proxies:" $GROUP_FILE
-	   else
-		  sed -i "/proxies: ${group_name}/d" $GROUP_FILE 2>/dev/null
-	   fi
-
-	   if [ "$set_proxy_provider" -eq 1 ]; then
-		  sed -i "/^ \{0,\}use: ${group_name}/c\  use:" $GROUP_FILE
-	   else
-		  sed -i "/use: ${group_name}/d" $GROUP_FILE 2>/dev/null
-	   fi
+		    if [ "$set_group" -eq 1 ]; then
+			  sed -i "/^ \{0,\}proxies: ${group_name}/c\  proxies:" $GROUP_FILE
+		    else
+			  sed -i "/proxies: ${group_name}/d" $GROUP_FILE 
+		    fi	     
+   fi      
+ 
    
-   fi
-   
-   
-   [ ! -z "$test_url" ] && {
-   	echo "  url: $test_url" >>$GROUP_FILE 2>/dev/null 
-   }
-   [ ! -z "$test_interval" ] && {
-   echo "  interval: \"$test_interval\"" >>$GROUP_FILE 2>/dev/null 
-   }
+    [ ! -z "$test_url" ] && {
+		echo "  url: $test_url" >>$GROUP_FILE 2>/dev/null 
+    }
+    [ ! -z "$test_interval" ] && {
+		echo "  interval: \"$test_interval\"" >>$GROUP_FILE 2>/dev/null 
+    }
 }
 
-
-config_load clash
-config_foreach yml_groups_set "groups"
-
-
-if [ "$(ls -l $GROUP_FILE|awk '{print $5}')" -ne 0 ]; then
-sed -i "1i\  " $GROUP_FILE 2>/dev/null 
-sed -i "2i\Proxy Group:" $GROUP_FILE 2>/dev/null 
-
+gcount=$( grep -c "config pgroups" $CFG_FILE 2>/dev/null)
+if [ $gcount -gt 0 ];then
+	config_load clash
+	config_foreach yml_groups_set "pgroups"
 fi
 
 
+if [ -f $GROUP_FILE ]; then
+	sed -i "1i\  " $GROUP_FILE 2>/dev/null 
+	sed -i "2i\proxy-groups:" $GROUP_FILE 2>/dev/null 
+fi
+
+
+RULE_FILE="/tmp/rules.yaml"
+rucount=$( grep -c "config rules" $CFG_FILE 2>/dev/null)
+
+if [ -f $RULE_FILE ];then
+	rm -rf $RULE_FILE 2>/dev/null
+fi
+	   
+	   
+add_rules()
+{
+	   local section="$1"
+	   config_get "rulegroups" "$section" "rulegroups" ""
+	   config_get "rulename" "$section" "rulename" ""
+	   config_get "type" "$section" "type" ""
+	   config_get "res" "$section" "res" ""
+	   config_get "rulenamee" "$section" "rulenamee" ""
+	   
+	    if [ ! -z $rulename ];then
+	      rulename=$rulename
+		elif [ ! -z $rulenamee ];then
+		  rulename=$rulenamee
+		fi	
+		  
+	   if [ "${res}" -eq 1 ];then
+		echo "- $type,$rulename,$rulegroups,no-resolve">>$RULE_FILE
+	   elif [ "${type}" == "MATCH" ];then
+	    echo "- $type,$rulegroups">>$RULE_FILE
+	   else
+		echo "- $type,$rulename,$rulegroups">>$RULE_FILE
+	   fi
+}
+
+if [ $rucount -gt 0 ];then	
+ config_load clash
+ config_foreach add_rules "rules"
+fi
+ 
+if [ -f $RULE_FILE ];then 
+	sed -i "1i\   " $RULE_FILE 2>/dev/null 
+	sed -i "2i\rules:" $RULE_FILE 2>/dev/null
+fi 
 
 mode=$(uci get clash.config.mode 2>/dev/null)
+p_mode=$(uci get clash.config.p_mode 2>/dev/null)
 da_password=$(uci get clash.config.dash_pass 2>/dev/null)
 redir_port=$(uci get clash.config.redir_port 2>/dev/null)
 http_port=$(uci get clash.config.http_port 2>/dev/null)
@@ -716,8 +759,9 @@ bind_addr=$(uci get clash.config.bind_addr 2>/dev/null)
 allow_lan=$(uci get clash.config.allow_lan 2>/dev/null)
 log_level=$(uci get clash.config.level 2>/dev/null)
 subtype=$(uci get clash.config.subcri 2>/dev/null)
+DNS_FILE="/usr/share/clash/dns.yaml" 
+TEMP_FILE="/tmp/dns_temp.yaml"
 
-		
 cat >> "$TEMP_FILE" <<-EOF
 #config-start-here
 EOF
@@ -728,42 +772,80 @@ EOF
 		sed -i "/redir-port: ${redir_port}/a\allow-lan: ${allow_lan}" $TEMP_FILE 2>/dev/null 
 		if [ $allow_lan == "true" ];  then
 		sed -i "/allow-lan: ${allow_lan}/a\bind-address: \"${bind_addr}\"" $TEMP_FILE 2>/dev/null 
-		sed -i "/bind-address: \"${bind_addr}\"/a\mode: Rule" $TEMP_FILE 2>/dev/null
-		sed -i "/mode: Rule/a\log-level: ${log_level}" $TEMP_FILE 2>/dev/null 
+		sed -i "/bind-address: \"${bind_addr}\"/a\mode: ${p_mode}" $TEMP_FILE 2>/dev/null
+		sed -i "/mode: ${p_mode}/a\log-level: ${log_level}" $TEMP_FILE 2>/dev/null 
 		sed -i "/log-level: ${log_level}/a\external-controller: 0.0.0.0:${dash_port}" $TEMP_FILE 2>/dev/null 
 		sed -i "/external-controller: 0.0.0.0:${dash_port}/a\secret: \"${da_password}\"" $TEMP_FILE 2>/dev/null 
-		sed -i "/secret: \"${da_password}\"/a\external-ui: \"/usr/share/clash/dashboard\"" $TEMP_FILE 2>/dev/null 
+		sed -i "/secret: \"${da_password}\"/a\external-ui: \"./dashboard\"" $TEMP_FILE 2>/dev/null 
 		sed -i "external-ui: \"/usr/share/clash/dashboard\"/a\  " $TEMP_FILE 2>/dev/null 
 		sed -i "   /a\   " $TEMP_FILE 2>/dev/null
 		else
-		sed -i "/allow-lan: ${allow_lan}/a\mode: Rule" $TEMP_FILE 2>/dev/null
-		sed -i "/mode: Rule/a\log-level: ${log_level}" $TEMP_FILE 2>/dev/null 
+		sed -i "/allow-lan: ${allow_lan}/a\mode: ${p_mode}" $TEMP_FILE 2>/dev/null
+		sed -i "/mode: ${p_mode}/a\log-level: ${log_level}" $TEMP_FILE 2>/dev/null 
 		sed -i "/log-level: ${log_level}/a\external-controller: 0.0.0.0:${dash_port}" $TEMP_FILE 2>/dev/null 
 		sed -i "/external-controller: 0.0.0.0:${dash_port}/a\secret: \"${da_password}\"" $TEMP_FILE 2>/dev/null 
-		sed -i "/secret: \"${da_password}\"/a\external-ui: \"/usr/share/clash/dashboard\"" $TEMP_FILE 2>/dev/null 
+		sed -i "/secret: \"${da_password}\"/a\external-ui: \"./dashboard\"" $TEMP_FILE 2>/dev/null 
 		fi
 		sed -i '/#config-start-here/ d' $TEMP_FILE 2>/dev/null
 
 		
 cat $DNS_FILE >> $TEMP_FILE  2>/dev/null
 
+
+script=$(uci get clash.config.script 2>/dev/null)
+ruleprovider=$(uci get clash.config.rulprp 2>/dev/null)
+ppro=$(uci get clash.config.ppro 2>/dev/null)
+rul=$(uci get clash.config.rul 2>/dev/null)
+prox=$(uci get clash.config.prox 2>/dev/null)
+CONFIG_YAML_RULE="/usr/share/clash/custom_rule.yaml"
+orul=$(uci get clash.config.orul 2>/dev/null)
+
+if [ $prox -eq 1 ];then
 if [ -f $SERVER_FILE ];then
 cat $SERVER_FILE >> $TEMP_FILE  2>/dev/null
+sed -i -e '$a\' $TEMP_FILE  2>/dev/null
+fi
 fi
 
+if [ $ppro -eq 1 ];then
 if [ -f $PROVIDER_FILE ];then 
 cat $PROVIDER_FILE >> $TEMP_FILE 2>/dev/null
 fi
-
-cat $GROUP_FILE >> $TEMP_FILE 2>/dev/null
-
-if [ -f $CONFIG_YAML ];then
-	rm -rf $CONFIG_YAML
 fi
 
-cat $TEMP_FILE $CONFIG_YAML_RULE > $CONFIG_YAML 2>/dev/null
+if [ -f $GROUP_FILE ];then
+cat $GROUP_FILE >> $TEMP_FILE 2>/dev/null
+fi
 
-sed -i "/Rule:/i\     " $CONFIG_YAML 2>/dev/null
+
+if [ $ruleprovider -eq 1 ];then
+if [ -f $RULE_PROVIDER ];then
+cat $RULE_PROVIDER >> $TEMP_FILE  2>/dev/null
+sed -i -e '$a\' $TEMP_FILE  2>/dev/null
+fi
+fi
+
+if [ $script -eq 1 ];then
+if [ -f $SCRIPT ];then
+cat $SCRIPT >> $TEMP_FILE  2>/dev/null
+sed -i -e '$a\' $TEMP_FILE  2>/dev/null
+fi
+fi
+
+
+if [ $rul -eq 1 ];then
+if [ -f $RULE_FILE ];then
+cat $RULE_FILE >> $TEMP_FILE 2>/dev/null
+fi
+fi
+
+if [ $orul -eq 1 ];then
+cat $TEMP_FILE $CONFIG_YAML_RULE > $CONFIG_YAML 2>/dev/null
+fi
+
+if [ $orul -eq 0 ] || [ -z $orul ];then
+mv $TEMP_FILE  $CONFIG_YAML 2>/dev/null
+fi
 
 if [ -z $check_name ] && [ "${same_tag}" -eq 1 ];then
 echo "${config_name}.yaml" >>/usr/share/clashbackup/create_list.conf
@@ -771,22 +853,18 @@ elif [ -z $check_name ] && [ "${same_tag}" -eq 0 ];then
 echo "${config_name}.yaml" >>/usr/share/clashbackup/create_list.conf
 fi
 
-rm -rf $TEMP_FILE $GROUP_FILE $Proxy_Group $CONFIG_FILE $PROVIDER_FILE 
-rm -rf /tmp/relay_server.list 2>/dev/null
+rm -rf $RULE_PROVIDER $PROVIDER_FILE $GROUP_FILE  $RULE_FILE $SERVER_FILE $Proxy_Group
 
- 	if [ $lang == "en" ] || [ $lang == "auto" ];then
+if [ $lang == "en" ] || [ $lang == "auto" ];then
 		echo "Completed Creating Custom Config.. " >$REAL_LOG 
 		 sleep 2
 			echo "Clash for OpenWRT" >$REAL_LOG
-	elif [ $lang == "zh_cn" ];then
+elif [ $lang == "zh_cn" ];then
     	echo "创建自定义配置完成..." >$REAL_LOG
 		sleep 2
 		echo "Clash for OpenWRT" >$REAL_LOG
-	fi
-
-rm -rf $SERVER_FILE
+fi
 fi
 fi
 
-
-
+	

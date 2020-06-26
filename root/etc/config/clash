@@ -32,11 +32,3 @@ config clash 'config'
 	option ping_enable '1'
 	option dnscache '0'
 
-	
-config addtype
-	option type 'IP-CIDR'
-	option pgroup 'REJECT'
-	option ipaaddr '198.18.0.1/16'
-	option res '1'
-	
-
